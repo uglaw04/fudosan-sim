@@ -2,161 +2,170 @@ import streamlit as st
 import json
 import gspread
 import re
+import pandas as pd
 from google.oauth2.service_account import Credentials
+import datetime
 
 # ==========================================
-# 🚨 パスワードロック機能 🚨
+# 🔐 設定・セキュリティ
 # ==========================================
+st.set_page_config(page_title="ユウジロウ専用プロ・シミュレーター", layout="wide")
+
 st.sidebar.title("🔐 セキュリティ")
-# パスワード入力欄（サイドバーに配置）
 password = st.sidebar.text_input("パスワードを入力", type="password")
-
 if password != st.secrets["app_password"]:
-    st.warning("左側のメニューから正しいパスワードを入力してください。")
-    st.stop()  # パスワードが違う場合はここで処理を完全ストップ
+    st.warning("左側のメニューからパスワードを入れてください。")
+    st.stop()
 
-# ==========================================
-# 1. スプシ（スプレッドシート）連携の設定
-# ==========================================
-# ユウジロウさんのスプシURLをセット済みです
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1R0LcnpJUkvN0TbYy3QN3_P0VyxgaMF8K1201hONkvoc/edit#gid=0"
 
 try:
-    scopes = [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-    ]
     key_dict = json.loads(st.secrets["gcp_service_account"])
-    credentials = Credentials.from_service_account_info(key_dict, scopes=scopes)
-    client = gspread.authorize(credentials)
-    # URLからシートを開く
-    sheet = client.open_by_url(SPREADSHEET_URL).sheet1
-except Exception as e:
-    st.error(f"スプシの連携に失敗しました。設定を確認してください: {e}")
+    creds = Credentials.from_service_account_info(key_dict, scopes=['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive'])
+    sheet = gspread.authorize(creds).open_by_url(SPREADSHEET_URL).sheet1
+except:
+    st.error("スプシ連携エラー：設定を確認してください。")
     st.stop()
 
-# ==========================================
-# 🌟 初期値の設定（session_state）
-# ==========================================
-if 'auto_name' not in st.session_state:
-    st.session_state['auto_name'] = ""
-if 'auto_price' not in st.session_state:
-    st.session_state['auto_price'] = 0.0
-if 'auto_yield' not in st.session_state:
-    st.session_state['auto_yield'] = 0.0
+# セッション状態
+if 'prop_name' not in st.session_state: st.session_state.prop_name = ""
+if 'price' not in st.session_state: st.session_state.price = 0.0
+if 'yield_val' not in st.session_state: st.session_state.yield_val = 0.0
+if 'built_year' not in st.session_state: st.session_state.built_year = 2000
 
 # ==========================================
-# 🤖 楽待コピペ全自動解析機能
+# 🏢 メイン：解析セクション
 # ==========================================
-st.title("🏢 ユウジロウ専用 物件シミュレーター")
+st.title("🏢 ユウジロウ専用：プロ・不動産シミュレーター")
 
-with st.expander("📝 楽待の物件情報をコピペして自動入力", expanded=True):
-    st.write("楽待の「シミュレーション画面」などのテキストを以下に貼り付けてください。")
-    raw_text = st.text_area("物件情報のテキスト", height=150)
-    
-    if st.button("テキストを解析して自動セット！"):
-        if raw_text:
-            # ① 価格の抽出 (例: "販売価格2億200万円")
-            price_match = re.search(r'販売価格([0-9億万]+)円', raw_text)
-            if price_match:
-                price_str = price_match.group(1)
-                oku = int(re.search(r'(\d+)億', price_str).group(1)) if '億' in price_str else 0
-                man = int(re.search(r'(\d+)万', price_str).group(1)) if '万' in price_str else 0
-                
-                # 億・万がない場合（数字のみ）の考慮
-                if oku == 0 and man == 0 and price_str.isdigit():
-                   total_price = int(price_str) * 10000
-                else:
-                   total_price = (oku * 100000000) + (man * 10000)
-                
-                st.session_state['auto_price'] = total_price / 10000  # 万円単位
-                st.success(f"✅ 価格を抽出: {st.session_state['auto_price']} 万円")
-
-            # ② 利回りの抽出 (例: "表面利回り4.30%")
-            yield_match = re.search(r'表面利回り([0-9.]+)%', raw_text)
-            if yield_match:
-                st.session_state['auto_yield'] = float(yield_match.group(1))
-                st.success(f"✅ 利回りを抽出: {st.session_state['auto_yield']} %")
-
-            # ③ 物件名の抽出 (最初の行などから)
-            # 「カオス目黒」のような物件名を探す
-            name_match = re.search(r'シミュレーション\n\n(.*?)\n', raw_text)
-            if name_match:
-                st.session_state['auto_name'] = name_match.group(1).strip()
-                st.success(f"✅ 物件名を抽出: {st.session_state['auto_name']}")
-            else:
-                # 別のパターンでの物件名抽出試行
-                lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
-                if len(lines) > 1:
-                    st.session_state['auto_name'] = lines[1]
-                    st.success(f"✅ おそらく物件名: {st.session_state['auto_name']}")
-        else:
-            st.warning("テキストが空っぽです。")
+with st.expander("📝 STEP1：楽待テキストを解析して精密セット", expanded=True):
+    raw_text = st.text_area("物件詳細テキストを貼り付け")
+    if st.button("精密解析実行"):
+        # 価格
+        p_m = re.search(r'販売価格([0-9億万]+)円', raw_text)
+        if p_m:
+            s = p_m.group(1)
+            o = int(re.search(r'(\d+)億', s).group(1)) if '億' in s else 0
+            m = int(re.search(r'(\d+)万', s).group(1)) if '万' in s else 0
+            st.session_state.price = float((o * 10000) + m)
+        # 利回り
+        y_m = re.search(r'表面利回り([0-9.]+)%', raw_text)
+        if y_m: st.session_state.yield_val = float(y_m.group(1))
+        # 築年
+        b_m = re.search(r'築年数(\d+)年', raw_text)
+        if b_m: st.session_state.built_year = int(b_m.group(1))
+        # 物件名
+        lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+        if len(lines) > 2: st.session_state.prop_name = lines[2]
+        st.rerun()
 
 st.divider()
 
 # ==========================================
-# 📊 シミュレーション入力フォーム
+# ⚙️ STEP2：詳細条件・税金・出口設定
 # ==========================================
-st.subheader("⚙️ 条件確認・微調整")
+st.subheader("⚙️ STEP2：プロ設定（手修正）")
+c1, c2, c3, c4 = st.columns(4)
 
-col1, col2 = st.columns(2)
+with c1:
+    f_name = st.text_input("物件名", value=st.session_state.prop_name)
+    f_price = st.number_input("価格（万円）", value=st.session_state.price, step=100.0)
+    f_yield = st.number_input("利回り（％）", value=st.session_state.yield_val, step=0.1)
 
-with col1:
-    property_name = st.text_input("物件名", value=st.session_state['auto_name'])
-    price_man = st.number_input("物件価格（万円）", value=float(st.session_state['auto_price']), step=100.0)
-    gross_yield = st.number_input("表面利回り（％）", value=float(st.session_state['auto_yield']), step=0.1)
+with c2:
+    f_rate = st.number_input("金利（％）", value=2.0, step=0.1)
+    f_years = st.number_input("融資期間（年）", value=30, step=1)
+    f_built = st.number_input("築年数（年）", value=st.session_state.built_year, step=1)
 
-with col2:
-    loan_rate = st.number_input("融資金利（％）", value=2.0, step=0.1)
-    loan_years = st.number_input("融資期間（年）", value=30, step=1)
-    expenses_rate = st.number_input("運営経費率（％）", value=20.0, step=1.0)
+with c3:
+    st.write("**🏚️ 経年リスク設定**")
+    f_rent_drop = st.slider("家賃下落率（年/％）", 0.0, 3.0, 1.0)
+    f_exp_rate = st.slider("経費率（％）", 10, 50, 20)
+
+with c4:
+    st.write("**💰 税金・出口設定**")
+    f_tax_rate = st.selectbox("所得税率（住民税込）", [20, 30, 40, 50], index=1)
+    f_exit_cap = st.number_input("出口利回り（％）", value=f_yield + 1.0, step=0.1)
 
 # ==========================================
-# 🚀 計算とスプシ保存
+# 📊 精密計算ロジック
 # ==========================================
-if st.button("計算してスプシに保存する"):
-    # 年間家賃収入
-    annual_rent = price_man * (gross_yield / 100)
-    # 年間経費
-    annual_expenses = annual_rent * (expenses_rate / 100)
-    # NOI
-    noi = annual_rent - annual_expenses
+# 簡易的な減価償却の計算（RC造：法定47年）
+remaining_life = max(1, 47 - f_built)
+depreciation_rate = 1 / remaining_life if remaining_life > 0 else 0
+building_value = f_price * 0.7 # 建物比率7割と仮定
+
+years = []
+cfs_pre_tax = []
+cfs_post_tax = []
+
+for y in range(1, int(f_years + 20) + 1):
+    years.append(y)
+    # 1. 家賃下落を考慮
+    current_rent = (f_price * (f_yield / 100)) * ((1 - f_rent_drop/100) ** (y-1))
+    noi = current_rent * (1 - f_exp_rate/100)
     
-    # ローン返済額（元利均等）
-    monthly_rate = (loan_rate / 100) / 12
-    months = loan_years * 12
-    if monthly_rate > 0:
-        monthly_payment = (price_man * monthly_rate * ((1 + monthly_rate) ** months)) / (((1 + monthly_rate) ** months) - 1)
-        annual_payment = monthly_payment * 12
+    # 2. ローン計算（元利均等）
+    m_rate = (f_rate / 100) / 12
+    m_len = f_years * 12
+    if y <= f_years:
+        if m_rate > 0:
+            m_pay = (f_price * m_rate * ((1 + m_rate)**m_len)) / (((1+m_rate)**m_len) - 1)
+        else:
+            m_pay = f_price / m_len
+        ads = m_pay * 12
+        # 利息（残債から概算）
+        interest = (f_price * (1 - (y-1)/f_years)) * (f_rate/100)
     else:
-        annual_payment = price_man / loan_years
+        ads = 0
+        interest = 0
+    
+    # 3. キャッシュフロー（税前）
+    pre_tax_cf = noi - ads
+    cfs_pre_tax.append(pre_tax_cf)
+    
+    # 4. 税金計算（NOI - 利息 - 減価償却）
+    current_dep = building_value * depreciation_rate if y <= remaining_life else 0
+    taxable_income = noi - interest - current_dep
+    tax = max(0, taxable_income * (f_tax_rate / 100))
+    
+    # 5. キャッシュフロー（税後）
+    cfs_post_tax.append(pre_tax_cf - tax)
 
-    # 手残りCF
-    btcf = noi - annual_payment
+df_long = pd.DataFrame({
+    "年数": years,
+    "税前CF": cfs_pre_tax,
+    "税後CF": cfs_post_tax
+})
 
-    # 結果表示
-    st.write("### 💰 計算結果")
-    res_col1, res_col2, res_col3 = st.columns(3)
-    res_col1.metric("年間家賃収入", f"{annual_rent:.1f} 万円")
-    res_col2.metric("年間返済額", f"{annual_payment:.1f} 万円")
-    res_col3.metric("手残りCF", f"{btcf:.1f} 万円/年")
+# 出口価格の計算
+exit_rent = (f_price * (f_yield / 100)) * ((1 - f_rent_drop/100) ** (f_years-1))
+exit_price = exit_rent / (f_exit_cap / 100)
 
-    # スプシへ書き込み
-    try:
-        row_data = [
-            property_name,
-            price_man,
-            gross_yield,
-            loan_rate,
-            loan_years,
-            annual_rent,
-            noi,
-            annual_payment,
-            btcf
-        ]
-        sheet.append_row(row_data)
-        st.balloons() # 成功の風船！
-        st.info("✅ スプシにデータを書き込みました！")
-    except Exception as e:
-        st.error(f"スプシ保存エラー: {e}")
+# ==========================================
+# 📋 グラフと解説
+# ==========================================
+st.divider()
+st.subheader("📊 長期収支シミュレーション（税金・下落考慮）")
+st.line_chart(df_long.set_index("年数"))
+
+col_exp, col_exit = st.columns(2)
+with col_exp:
+    st.info("""
+    **💡 税金の話と「デッドクロス」**
+    - **税後CF（薄い青）**がガクッと下がる時期に注目してください。
+    - 建物が古くなり「減価償却」が終わると、経費が減るため**税金が跳ね上がります**。
+    - 手元の現金（CF）より払う税金が多くなるこの現象を**デッドクロス**と呼びます。
+    """)
+
+with col_exit:
+    st.warning(f"""
+    **🏠 出口（売却）の予測**
+    - {f_years}年後に利回り **{f_exit_cap}%** で売れると仮定。
+    - 推定売却価格: **{exit_price:,.0f}万円**
+    - 購入価格との差: **{exit_price - f_price:,.0f}万円**
+    """)
+
+if st.button("この精密データをスプシに保存"):
+    sheet.append_row([f_name, f_price, f_yield, f_tax_rate, cf_year1 if 'cf_year1' in locals() else cfs_post_tax[0], exit_price])
+    st.balloons()
