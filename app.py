@@ -1,98 +1,162 @@
 import streamlit as st
-import pandas as pd
-from datetime import datetime
-import gspread
-from google.oauth2.service_account import Credentials
 import json
+import gspread
+import re
+from google.oauth2.service_account import Credentials
 
-# --- 🚨 パスワードロック機能 🚨 ---
-password = st.text_input("パスワード", type="password")
+# ==========================================
+# 🚨 パスワードロック機能 🚨
+# ==========================================
+st.sidebar.title("🔐 セキュリティ")
+# パスワード入力欄（サイドバーに配置）
+password = st.sidebar.text_input("パスワードを入力", type="password")
+
 if password != st.secrets["app_password"]:
-    st.warning("正しいパスワードを入力してください。")
+    st.warning("左側のメニューから正しいパスワードを入力してください。")
     st.stop()  # パスワードが違う場合はここで処理を完全ストップ
-# -----------------------------------
-# --- 1. スプレッドシート連携の設定 ---
-# Streamlitの秘密の金庫(Secrets)から合鍵を読み込む
-key_dict = json.loads(st.secrets["gcp_service_account"])
-scopes = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
-]
-creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
-client = gspread.authorize(creds)
 
-# ★ここにフェーズ1で作ったスプレッドシートのURLを入れます★
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1R0LcnpJUkvN0TbYy3QN3_P0VyxgaMF8K1201hONkvoc/edit?gid=0#gid=0"
-sheet = client.open_by_url(SPREADSHEET_URL).sheet1
+# ==========================================
+# 1. スプシ（スプレッドシート）連携の設定
+# ==========================================
+# ユウジロウさんのスプシURLをセット済みです
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1R0LcnpJUkvN0TbYy3QN3_P0VyxgaMF8K1201hONkvoc/edit#gid=0"
 
-# --- 2. 計算関数 ---
-def calc_ads(principal, annual_rate, years):
-    if principal <= 0 or years <= 0: return 0
-    r = annual_rate / 100 / 12
-    n = years * 12
-    if r == 0: return principal / years
-    m = (principal * 10000 * r) / (1 - (1 + r) ** -n)
-    return (m * 12) / 10000
+try:
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    key_dict = json.loads(st.secrets["gcp_service_account"])
+    credentials = Credentials.from_service_account_info(key_dict, scopes=scopes)
+    client = gspread.authorize(credentials)
+    # URLからシートを開く
+    sheet = client.open_by_url(SPREADSHEET_URL).sheet1
+except Exception as e:
+    st.error(f"スプシの連携に失敗しました。設定を確認してください: {e}")
+    st.stop()
 
-# --- 3. 画面UIとロジック ---
-st.set_page_config(page_title="不動産投資シミュレーター Pro+", layout="wide")
-st.title("不動産投資シミュレーター Pro+ (クラウド保存版)")
+# ==========================================
+# 🌟 初期値の設定（session_state）
+# ==========================================
+if 'auto_name' not in st.session_state:
+    st.session_state['auto_name'] = ""
+if 'auto_price' not in st.session_state:
+    st.session_state['auto_price'] = 0.0
+if 'auto_yield' not in st.session_state:
+    st.session_state['auto_yield'] = 0.0
 
-col1, col2 = st.columns([1, 1])
+# ==========================================
+# 🤖 楽待コピペ全自動解析機能
+# ==========================================
+st.title("🏢 ユウジロウ専用 物件シミュレーター")
+
+with st.expander("📝 楽待の物件情報をコピペして自動入力", expanded=True):
+    st.write("楽待の「シミュレーション画面」などのテキストを以下に貼り付けてください。")
+    raw_text = st.text_area("物件情報のテキスト", height=150)
+    
+    if st.button("テキストを解析して自動セット！"):
+        if raw_text:
+            # ① 価格の抽出 (例: "販売価格2億200万円")
+            price_match = re.search(r'販売価格([0-9億万]+)円', raw_text)
+            if price_match:
+                price_str = price_match.group(1)
+                oku = int(re.search(r'(\d+)億', price_str).group(1)) if '億' in price_str else 0
+                man = int(re.search(r'(\d+)万', price_str).group(1)) if '万' in price_str else 0
+                
+                # 億・万がない場合（数字のみ）の考慮
+                if oku == 0 and man == 0 and price_str.isdigit():
+                   total_price = int(price_str) * 10000
+                else:
+                   total_price = (oku * 100000000) + (man * 10000)
+                
+                st.session_state['auto_price'] = total_price / 10000  # 万円単位
+                st.success(f"✅ 価格を抽出: {st.session_state['auto_price']} 万円")
+
+            # ② 利回りの抽出 (例: "表面利回り4.30%")
+            yield_match = re.search(r'表面利回り([0-9.]+)%', raw_text)
+            if yield_match:
+                st.session_state['auto_yield'] = float(yield_match.group(1))
+                st.success(f"✅ 利回りを抽出: {st.session_state['auto_yield']} %")
+
+            # ③ 物件名の抽出 (最初の行などから)
+            # 「カオス目黒」のような物件名を探す
+            name_match = re.search(r'シミュレーション\n\n(.*?)\n', raw_text)
+            if name_match:
+                st.session_state['auto_name'] = name_match.group(1).strip()
+                st.success(f"✅ 物件名を抽出: {st.session_state['auto_name']}")
+            else:
+                # 別のパターンでの物件名抽出試行
+                lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+                if len(lines) > 1:
+                    st.session_state['auto_name'] = lines[1]
+                    st.success(f"✅ おそらく物件名: {st.session_state['auto_name']}")
+        else:
+            st.warning("テキストが空っぽです。")
+
+st.divider()
+
+# ==========================================
+# 📊 シミュレーション入力フォーム
+# ==========================================
+st.subheader("⚙️ 条件確認・微調整")
+
+col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("物件・融資スペック")
-    price = st.number_input("価格 (万円)", value=20000, step=1000)
-    rent = st.number_input("家賃 (万円)", value=1200, step=100)
-    struct_options = {"RC (耐用47年)": 47, "重量鉄骨 (耐用34年)": 34, "木造 (耐用22年)": 22}
-    structure = struct_options[st.selectbox("構造", list(struct_options.keys()))]
-    age = st.number_input("築年数 (年)", value=20, step=1)
-    
-    down_payment = st.number_input("頭金 (万円)", value=4000, step=500)
-    opex_rate = st.number_input("経費率 (%)", value=25.0, step=1.0)
-    stress_rate = st.number_input("ストレス金利 (%)", value=3.5, step=0.1)
-    real_rate = st.number_input("実行金利 (%)", value=1.5, step=0.1)
-
-term = max(10, structure - age)
-loan = price - down_payment
-noi = rent * (1 - opex_rate / 100)
-stress_ads = calc_ads(loan, stress_rate, term)
-real_ads = calc_ads(loan, real_rate, term)
-dcr = (noi / stress_ads) if stress_ads > 0 else 0
-cf = noi - real_ads
+    property_name = st.text_input("物件名", value=st.session_state['auto_name'])
+    price_man = st.number_input("物件価格（万円）", value=float(st.session_state['auto_price']), step=100.0)
+    gross_yield = st.number_input("表面利回り（％）", value=float(st.session_state['auto_yield']), step=0.1)
 
 with col2:
-    st.subheader("判定結果")
-    mcol1, mcol2, mcol3 = st.columns(3)
-    mcol1.metric("借入総額", f"{int(loan):,} 万円", f"期間: {term}年")
-    mcol2.metric("審査用 DCR", f"{dcr:.2f}")
-    mcol3.metric("リアル手残り (CF)", f"{int(cf):,} 万円/年")
+    loan_rate = st.number_input("融資金利（％）", value=2.0, step=0.1)
+    loan_years = st.number_input("融資期間（年）", value=30, step=1)
+    expenses_rate = st.number_input("運営経費率（％）", value=20.0, step=1.0)
 
-    st.markdown("---")
-    st.subheader("データ記録 (スプレッドシートへ保存)")
-    memo = st.text_input("物件メモ（駅徒歩、特徴など）")
+# ==========================================
+# 🚀 計算とスプシ保存
+# ==========================================
+if st.button("計算してスプシに保存する"):
+    # 年間家賃収入
+    annual_rent = price_man * (gross_yield / 100)
+    # 年間経費
+    annual_expenses = annual_rent * (expenses_rate / 100)
+    # NOI
+    noi = annual_rent - annual_expenses
     
-    if st.button("この物件を記録する", type="primary"):
-        # スプレッドシートの最終行にデータを追加
+    # ローン返済額（元利均等）
+    monthly_rate = (loan_rate / 100) / 12
+    months = loan_years * 12
+    if monthly_rate > 0:
+        monthly_payment = (price_man * monthly_rate * ((1 + monthly_rate) ** months)) / (((1 + monthly_rate) ** months) - 1)
+        annual_payment = monthly_payment * 12
+    else:
+        annual_payment = price_man / loan_years
+
+    # 手残りCF
+    btcf = noi - annual_payment
+
+    # 結果表示
+    st.write("### 💰 計算結果")
+    res_col1, res_col2, res_col3 = st.columns(3)
+    res_col1.metric("年間家賃収入", f"{annual_rent:.1f} 万円")
+    res_col2.metric("年間返済額", f"{annual_payment:.1f} 万円")
+    res_col3.metric("手残りCF", f"{btcf:.1f} 万円/年")
+
+    # スプシへ書き込み
+    try:
         row_data = [
-            datetime.now().strftime("%Y/%m/%d %H:%M"),
-            price,
-            round((rent/price)*100, 2) if price > 0 else 0,
-            round(dcr, 2),
-            int(cf),
-            memo
+            property_name,
+            price_man,
+            gross_yield,
+            loan_rate,
+            loan_years,
+            annual_rent,
+            noi,
+            annual_payment,
+            btcf
         ]
         sheet.append_row(row_data)
-        st.success("スプレッドシートに保存しました！")
-
-# スプレッドシートのデータを読み込んで画面に表示
-st.markdown("---")
-st.subheader("過去の比較ログ")
-try:
-    records = sheet.get_all_records()
-    if records:
-        st.dataframe(pd.DataFrame(records), use_container_width=True)
-    else:
-        st.info("まだ記録がありません。")
-except Exception as e:
-    st.error("データの読み込みに失敗しました。")
+        st.balloons() # 成功の風船！
+        st.info("✅ スプシにデータを書き込みました！")
+    except Exception as e:
+        st.error(f"スプシ保存エラー: {e}")
