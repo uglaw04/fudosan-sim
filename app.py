@@ -12,7 +12,6 @@ from google.oauth2.service_account import Credentials
 # ==========================================
 st.set_page_config(page_title="ユウジロウ専用：最強シミュレーター", layout="wide")
 
-# サイドバー：パスワードロック
 st.sidebar.title("🔐 セキュリティ")
 password = st.sidebar.text_input("パスワードを入力", type="password")
 if password != st.secrets["app_password"]:
@@ -80,7 +79,7 @@ with c3:
 
 with c4:
     f_exit_cap = st.number_input("出口想定利回り（％）", value=st.session_state.yield_val + 1.0, step=0.1)
-    st.caption("※古くなると売却利回りは上がります（＝価格は下がる）")
+    st.caption("※古くなると売却利回りは上がります")
 
 # ==========================================
 # 📊 計算ロジック（50年分）
@@ -88,49 +87,53 @@ with c4:
 years = list(range(1, 51))
 annual_cf_list = []
 cumulative_cf_list = []
-exit_hand_list = [] # ○年目に売った時の手残り総額
+exit_hand_list = []
 
 total_accumulated_cf = 0
 
 for y in years:
-    # 1. 収入計算（家賃下落考慮）
     current_rent = (f_price * (f_yield / 100)) * ((1 - f_rent_drop/100) ** (y-1))
     noi = current_rent * (1 - f_exp_rate/100)
     
-    # 2. 返済計算
     m_rate = (f_rate / 100) / 12
     m_len = f_years * 12
     if y <= f_years:
         ads = ((f_price * m_rate * ((1 + m_rate)**m_len)) / (((1+m_rate)**m_len) - 1)) * 12
-        loan_balance = f_price * (1 - (y / f_years)) # 簡易的な元金減少
+        loan_balance = f_price * (1 - (y / f_years))
     else:
         ads = 0
         loan_balance = 0
         
-    # 3. 単年CF計算
     cf = noi - ads
     total_accumulated_cf += cf
     
     annual_cf_list.append(cf)
     cumulative_cf_list.append(total_accumulated_cf)
     
-    # 4. 出口想定（その年に売却したと仮定）
     exit_price = current_rent / (f_exit_cap / 100)
     hand_over = exit_price - loan_balance + total_accumulated_cf
     exit_hand_list.append(hand_over)
 
 # ==========================================
-# 📈 楽待風：2軸ハイブリッドグラフ（Plotly）
+# 📈 楽待風：2軸ハイブリッドグラフ（色分け版）
 # ==========================================
 st.divider()
 st.subheader("📊 50年間のトータル収支シミュレーション")
 
-# グラフ作成
+# 🎨 棒グラフの色を判定（黒字：lightblue, 赤字：lightpink）
+bar_colors = ['lightblue' if cf >= 0 else 'lightpink' for cf in annual_cf_list]
+
 fig = make_subplots(specs=[[{"secondary_y": True}]])
 
 # 棒グラフ：単年CF（左軸）
 fig.add_trace(
-    go.Bar(x=years, y=annual_cf_list, name="単年度キャッシュフロー", marker_color='lightblue', opacity=0.7),
+    go.Bar(
+        x=years, 
+        y=annual_cf_list, 
+        name="単年度キャッシュフロー", 
+        marker_color=bar_colors, # ここで色分けを指定！
+        opacity=0.8
+    ),
     secondary_y=False,
 )
 
@@ -146,12 +149,12 @@ fig.add_trace(
     secondary_y=True,
 )
 
-# レイアウト調整
 fig.update_layout(
     title_text=f"{f_name} の長期収支予測",
     xaxis_title="経過年数",
     legend=dict(x=0, y=1.2, orientation="h"),
-    height=500
+    height=500,
+    margin=dict(t=100)
 )
 
 fig.update_yaxes(title_text="単年収支 (万円)", secondary_y=False)
@@ -160,18 +163,18 @@ fig.update_yaxes(title_text="累計・資産総額 (万円)", secondary_y=True)
 st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 💡 投資診断アドバイス
+# 💡 投資判断アドバイス
 # ==========================================
 st.subheader("💡 ユウジロウさんのための投資判断データ")
 col_a, col_b, col_c = st.columns(3)
 
 with col_a:
     st.write("**💰 単年度の健康状態**")
-    if annual_cf_list[0] >= 0:
-        st.success(f"1年目から黒字です！ (+{annual_cf_list[0]:,.0f}万円/年)")
+    first_cf = annual_cf_list[0]
+    if first_cf >= 0:
+        st.success(f"1年目から黒字です！ (+{first_cf:,.0f}万円/年)")
     else:
-        st.error(f"1年目は赤字です (▲{abs(annual_cf_list[0]):,.0f}万円/年)")
-    st.caption("※経費・返済後の手残り額")
+        st.error(f"1年目は赤字です (▲{abs(first_cf):,.0f}万円/年)")
 
 with col_b:
     st.write("**🏁 累計CFのプラス転換**")
@@ -185,8 +188,11 @@ with col_c:
     st.write("**🏠 出口戦略の目安**")
     max_exit_year = exit_hand_list.index(max(exit_hand_list)) + 1
     st.warning(f"**{max_exit_year}年目** の売却がトータル利益最大です。")
-    st.caption(f"10年目の売却手残り: {exit_hand_list[9]:,.0f}万円")
 
-if st.button("この精密解析結果をスプシに保存する"):
-    sheet.append_row([f_name, f_price, f_yield, annual_cf_list[0], recovery_year, exit_hand_list[9]])
-    st.balloons()
+if st.button("この最終条件をスプシに保存する"):
+    try:
+        sheet.append_row([f_name, f_price, f_yield, annual_cf_list[0], recovery_year, exit_hand_list[9]])
+        st.balloons()
+        st.success("スプシに保存しました！")
+    except:
+        st.error("スプシ保存に失敗しました。")
