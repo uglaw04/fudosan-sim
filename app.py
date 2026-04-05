@@ -5,6 +5,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 import json
 
+# --- 🚨 パスワードロック機能 🚨 ---
+password = st.text_input("パスワード", type="password")
+if password != st.secrets["app_password"]:
+    st.warning("正しいパスワードを入力してください。")
+    st.stop()  # パスワードが違う場合はここで処理を完全ストップ
+# -----------------------------------
 # --- 1. スプレッドシート連携の設定 ---
 # Streamlitの秘密の金庫(Secrets)から合鍵を読み込む
 key_dict = json.loads(st.secrets["gcp_service_account"])
